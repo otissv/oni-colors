@@ -7,7 +7,7 @@ Oni Colors is the shared color model that provides sRGB `RGBA`, a Tailwind-style
 ## Quick start
 
 ```odin
-import col "../colors" // adjust path to your project layout
+import col "libs:colors"
 
 red := col.css_color_to_rgba(.RED_500)
 tint := col.to_rgba_color(col.Hex(0xFF0000FF))

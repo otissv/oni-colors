@@ -125,6 +125,7 @@ test_external_semantic_theme_token_goldens :: proc(t: ^testing.T) {
 		{.BORDER, {64, 64, 64, 255}},
 		{.INPUT, {64, 64, 64, 255}},
 		{.RING, {0, 120, 212, 255}},
+		{.SELECTION, {0, 120, 212, 90}},
 		{.SIDEBAR, {23, 23, 23, 255}},
 		{.SIDEBAR_FOREGROUND, {250, 250, 250, 255}},
 		{.SIDEBAR_PRIMARY, {20, 71, 230, 255}},

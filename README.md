@@ -2,7 +2,7 @@
 
 Standalone Odin color package. Depends only on `core:math` — no other dependencies.
 
-Oni Colors is the shared color model that provides sRGB `RGBA`, a Tailwind-style named palette, alternate color spaces (hex, HSL, HWB, LCH, OKLCH), and conversions to byte and normalized float channels.
+Oni Colors is the shared color model that provides sRGB `RGBA`, a Tailwind-style named palette, alternate color spaces (hex, HSL, HWB, LCH, OKLCH, Lab, CMYK), web-safe snapping, and conversions to byte and normalized float channels.
 
 ## Quick start
 
@@ -22,9 +22,12 @@ clear := col.color_to_f32(col.Colors(col.Color.BACKGROUND))
 | `Color` | Named palette enum (semantic tokens + Tailwind shades) |
 | `Hex` | Packed `#RRGGBBAA` as `distinct u32` |
 | `HSLA` | Hue °, saturation/lightness/alpha in 0–1 |
+| `HSVA` | Hue °, saturation/value/alpha in 0–1 (HSB/HSV) |
 | `HWBA` | Hue °, whiteness/blackness/alpha in 0–1 |
 | `LCHA` | CIE LCH: L 0–100, chroma ≥ 0, hue °, alpha 0–1 |
 | `OKLCHA` | OKLCH: L 0–1, chroma ≥ 0, hue °, alpha 0–1 |
+| `LABA` | CIE Lab D65: L* 0–100, a*/b* (field `a` is a*, not alpha), `alpha` 0–1 |
+| `CMYKA` | Device CMYK + alpha, all channels 0–1 |
 | `Colors` | Union of the static variants above |
 | `Palette` | `[Color]RGBA` |
 
@@ -53,9 +56,22 @@ to_rgba_color :: proc { ... } // overload set
 | `RGBA` | `rgba_to_rgba` (identity) |
 | `Hex` | `hex_to_rgba` |
 | `HSLA` | `hsla_to_rgba` |
+| `HSVA` | `hsva_to_rgba` |
 | `HWBA` | `hwba_to_rgba` |
 | `LCHA` | `lcha_to_rgba` |
 | `OKLCHA` | `oklcha_to_rgba` |
+| `LABA` | `laba_to_rgba` |
+| `CMYKA` | `cmyka_to_rgba` |
+
+Reverse / string helpers:
+
+```odin
+rgba_to_hsva(c) / rgba_to_hsla(c) / rgba_to_hwba(c) / rgba_to_laba(c) / rgba_to_cmyka(c)
+rgba_to_hex(c)
+hex_parse("#rrggbb") / hex_format(c, include_alpha)
+color_hue_wrap(h) // normalize degrees into [0, 360)
+is_web_safe(c) / rgba_to_web_safe(c) // WEB_SAFE_STEP = 51
+```
 
 For GPU / shaders:
 

@@ -1,6 +1,7 @@
 package oni_colors
 
 import "core:math"
+import "core:strings"
 
 /*
 8-bit per-channel sRGB color with premultiplied-friendly alpha.
@@ -19,6 +20,13 @@ Hue in degrees (0-360), saturation/lightness/alpha in 0-1.
 */
 HSLA :: struct {
 	h, s, l, a: f32,
+}
+
+/*
+Hue in degrees (0-360), saturation/value/alpha in 0-1 (HSB / HSV).
+*/
+HSVA :: struct {
+	h, s, v, a: f32,
 }
 
 /*
@@ -41,6 +49,24 @@ OK LCH color: lightness 0-1, chroma ≥ 0, hue 0-360°, alpha 0-1.
 OKLCHA :: struct {
 	l, c, h, a: f32,
 }
+
+/*
+CIE Lab (D65): L* 0–100, a* and b* unbounded (typical roughly −128…127), alpha 0–1.
+Field `a` is the Lab a* axis (not alpha); alpha is `alpha`.
+*/
+LABA :: struct {
+	l, a, b, alpha: f32,
+}
+
+/*
+Device CMYK + alpha; all channels 0–1.
+*/
+CMYKA :: struct {
+	c, m, y, k, a: f32,
+}
+
+// Web-safe palette step (0x33): channels snap to 0, 51, …, 255.
+WEB_SAFE_STEP :: 51
 
 
 // Tailwind CSS v4 default color palette.
@@ -749,9 +775,12 @@ Colors :: union {
 	RGBA,
 	Hex,
 	HSLA,
+	HSVA,
 	HWBA,
 	LCHA,
 	OKLCHA,
+	LABA,
+	CMYKA,
 }
 
 
@@ -777,6 +806,75 @@ color_linear_to_srgb :: proc(c: f32) -> f32 {
 		return 12.92 * c
 	}
 	return 1.055 * math.pow(c, 1.0 / 2.4) - 0.055
+}
+
+/*
+Converts an sRGB component to linear light.
+*/
+@(private)
+color_srgb_to_linear :: proc(c: f32) -> f32 {
+	if c <= 0.04045 {
+		return c / 12.92
+	}
+	return math.pow((c + 0.055) / 1.055, 2.4)
+}
+
+@(private)
+color_lab_d65_delta :: proc() -> f32 {
+	return 6.0 / 29.0
+}
+
+@(private)
+color_lab_d65_kappa :: proc() -> f32 {
+	return 903.3
+}
+
+/*
+CIE Lab f(t) for D65 (t is normalized XYZ relative to the reference white).
+*/
+@(private)
+color_lab_d65_f :: proc(t: f32) -> f32 {
+	delta := color_lab_d65_delta()
+	kappa := color_lab_d65_kappa()
+
+	if t > delta * delta * delta {
+		return math.pow(t, 1.0 / 3.0)
+	}
+
+	return (kappa * t + 16) / 116
+}
+
+/*
+Inverts CIE Lab f for D65 XYZ → Lab.
+*/
+@(private)
+color_lab_d65_f_inv :: proc(t: f32) -> f32 {
+	delta := color_lab_d65_delta()
+	kappa := color_lab_d65_kappa()
+
+	if t > delta {
+		return t * t * t
+	}
+
+	return (116 * t - 16) / kappa
+}
+
+@(private)
+color_linear_rgb_to_xyz_d65 :: proc(r, g, b: f32) -> (x, y, z: f32) {
+	x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b
+	y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
+	z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b
+
+	return x, y, z
+}
+
+@(private)
+color_xyz_to_linear_rgb_d65 :: proc(x, y, z: f32) -> (r, g, b: f32) {
+	r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z
+	g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z
+	b = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z
+
+	return r, g, b
 }
 
 /*
@@ -839,6 +937,273 @@ hsla_to_rgba :: proc(c: HSLA) -> RGBA {
 	return RGBA{r, g, b, a}
 }
 
+/*
+Normalizes hue into [0, 360).
+*/
+color_hue_wrap :: proc(h: f32) -> f32 {
+	hue := math.mod(h, 360)
+
+	if hue < 0 {
+		hue += 360
+	}
+
+	return hue
+}
+
+/*
+Converts HSVA (hue/saturation/value/alpha) to sRGB RGBA.
+*/
+hsva_to_rgba :: proc(c: HSVA) -> RGBA {
+	h := color_hue_wrap(c.h)
+	s := color_clamp01(c.s)
+	v := color_clamp01(c.v)
+	a := color_u8_from01(c.a)
+
+	if s == 0 {
+		gray := color_u8_from01(v)
+		return RGBA{gray, gray, gray, a}
+	}
+
+	sector := h / 60
+	i := int(sector)
+	f := sector - f32(i)
+	p := v * (1 - s)
+	q := v * (1 - s * f)
+	t := v * (1 - s * (1 - f))
+
+	r, g, b: f32
+
+	switch i {
+	case 0:
+		r, g, b = v, t, p
+	case 1:
+		r, g, b = q, v, p
+	case 2:
+		r, g, b = p, v, t
+	case 3:
+		r, g, b = p, q, v
+	case 4:
+		r, g, b = t, p, v
+	case:
+		r, g, b = v, p, q
+	}
+
+	return RGBA{color_u8_from01(r), color_u8_from01(g), color_u8_from01(b), a}
+}
+
+/*
+Converts sRGB RGBA to HSVA.
+
+When the color is achromatic, `h` is 0. Callers that need hue continuity
+across near-gray values should preserve a previous hue themselves.
+*/
+rgba_to_hsva :: proc(c: RGBA) -> HSVA {
+	rf := f32(c.r) / 255
+	gf := f32(c.g) / 255
+	bf := f32(c.b) / 255
+	af := f32(c.a) / 255
+
+	max_c := max(rf, max(gf, bf))
+	min_c := min(rf, min(gf, bf))
+	delta := max_c - min_c
+
+	h: f32 = 0
+	s: f32 = 0
+	v := max_c
+
+	if max_c > 0 {
+		s = delta / max_c
+	}
+
+	if delta > 0 {
+		switch max_c {
+		case rf:
+			h = 60 * math.mod((gf - bf) / delta, 6)
+		case gf:
+			h = 60 * ((bf - rf) / delta + 2)
+		case:
+			h = 60 * ((rf - gf) / delta + 4)
+		}
+
+		if h < 0 {
+			h += 360
+		}
+	}
+
+	return HSVA{h = h, s = s, v = v, a = af}
+}
+
+/*
+Converts sRGB RGBA to HSLA.
+
+Achromatic colors report `h` as 0.
+*/
+rgba_to_hsla :: proc(c: RGBA) -> HSLA {
+	rf := f32(c.r) / 255
+	gf := f32(c.g) / 255
+	bf := f32(c.b) / 255
+	af := f32(c.a) / 255
+
+	max_c := max(rf, max(gf, bf))
+	min_c := min(rf, min(gf, bf))
+	delta := max_c - min_c
+
+	l := (max_c + min_c) * 0.5
+	h: f32 = 0
+	s: f32 = 0
+
+	if delta > 0 {
+		s = delta / (1 - abs(2 * l - 1))
+
+		switch max_c {
+		case rf:
+			h = 60 * math.mod((gf - bf) / delta, 6)
+		case gf:
+			h = 60 * ((bf - rf) / delta + 2)
+		case:
+			h = 60 * ((rf - gf) / delta + 4)
+		}
+
+		if h < 0 {
+			h += 360
+		}
+	}
+
+	return HSLA{h = h, s = color_clamp01(s), l = color_clamp01(l), a = af}
+}
+
+/*
+Packs RGBA into a #RRGGBBAA Hex value.
+*/
+rgba_to_hex :: proc(c: RGBA) -> Hex {
+	return Hex(u32(c.r) << 24 | u32(c.g) << 16 | u32(c.b) << 8 | u32(c.a))
+}
+
+@(private)
+color_hex_nibble :: proc(c: u8) -> (u8, bool) {
+	switch c {
+	case '0' ..= '9':
+		return c - '0', true
+	case 'a' ..= 'f':
+		return c - 'a' + 10, true
+	case 'A' ..= 'F':
+		return c - 'A' + 10, true
+	}
+
+	return 0, false
+}
+
+@(private)
+color_hex_byte :: proc(hi, lo: u8) -> (u8, bool) {
+	h, h_ok := color_hex_nibble(hi)
+	l, l_ok := color_hex_nibble(lo)
+
+	if !h_ok || !l_ok {
+		return 0, false
+	}
+
+	return h << 4 | l, true
+}
+
+/*
+Parses a CSS-like hex color string into RGBA.
+
+Accepts optional leading `#`, and lengths 3 (#RGB), 4 (#RGBA), 6 (#RRGGBB),
+or 8 (#RRGGBBAA). Shorthand expands by repeating each nibble. Missing alpha
+defaults to opaque (255).
+*/
+hex_parse :: proc(text: string) -> (RGBA, bool) {
+	s := strings.trim_space(text)
+
+	if len(s) == 0 {
+		return {}, false
+	}
+
+	if s[0] == '#' {
+		s = s[1:]
+	}
+
+	r, g, b: u8
+	a: u8 = 255
+
+	switch len(s) {
+	case 3, 4:
+		rn, r_ok := color_hex_nibble(s[0])
+		gn, g_ok := color_hex_nibble(s[1])
+		bn, b_ok := color_hex_nibble(s[2])
+
+		if !r_ok || !g_ok || !b_ok {
+			return {}, false
+		}
+
+		r = rn << 4 | rn
+		g = gn << 4 | gn
+		b = bn << 4 | bn
+
+		if len(s) == 4 {
+			an, a_ok := color_hex_nibble(s[3])
+
+			if !a_ok {
+				return {}, false
+			}
+
+			a = an << 4 | an
+		}
+	case 6, 8:
+		rb, r_ok := color_hex_byte(s[0], s[1])
+		gb, g_ok := color_hex_byte(s[2], s[3])
+		bb, b_ok := color_hex_byte(s[4], s[5])
+
+		if !r_ok || !g_ok || !b_ok {
+			return {}, false
+		}
+
+		r, g, b = rb, gb, bb
+
+		if len(s) == 8 {
+			ab, a_ok := color_hex_byte(s[6], s[7])
+
+			if !a_ok {
+				return {}, false
+			}
+
+			a = ab
+		}
+	case:
+		return {}, false
+	}
+
+	return RGBA{r, g, b, a}, true
+}
+
+/*
+Formats RGBA as `#RRGGBB` or `#RRGGBBAA` into `allocator` (default context).
+*/
+hex_format :: proc(
+	c: RGBA,
+	include_alpha := false,
+	allocator := context.allocator,
+) -> string {
+	b := strings.builder_make(allocator)
+	strings.write_byte(&b, '#')
+
+	write_hex_byte :: proc(b: ^strings.Builder, v: u8) {
+		hex_digits := "0123456789abcdef"
+		strings.write_byte(b, hex_digits[v >> 4])
+		strings.write_byte(b, hex_digits[v & 0xf])
+	}
+
+	write_hex_byte(&b, c.r)
+	write_hex_byte(&b, c.g)
+	write_hex_byte(&b, c.b)
+
+	if include_alpha {
+		write_hex_byte(&b, c.a)
+	}
+
+	return strings.to_string(b)
+}
+
 
 /*
 Converts HWBA (hue/whiteness/blackness/alpha) to sRGB RGBA.
@@ -863,6 +1228,58 @@ hwba_to_rgba :: proc(c: HWBA) -> RGBA {
 }
 
 /*
+Converts CIE Lab (D65) to sRGB RGBA.
+*/
+laba_to_rgba :: proc(c: LABA) -> RGBA {
+	l := math.clamp(c.l, 0, 100)
+	lab_a := c.a
+	lab_b := c.b
+
+	fy := (l + 16) / 116
+	fx := lab_a / 500 + fy
+	fz := fy - lab_b / 200
+
+	x := 0.95047 * color_lab_d65_f_inv(fx)
+	y := 1.00000 * color_lab_d65_f_inv(fy)
+	z := 1.08883 * color_lab_d65_f_inv(fz)
+
+	linear_r, linear_g, linear_b := color_xyz_to_linear_rgb_d65(x, y, z)
+
+	return RGBA {
+		color_u8_from01(color_linear_to_srgb(linear_r)),
+		color_u8_from01(color_linear_to_srgb(linear_g)),
+		color_u8_from01(color_linear_to_srgb(linear_b)),
+		color_u8_from01(c.alpha),
+	}
+}
+
+/*
+Converts sRGB RGBA to CIE Lab (D65).
+*/
+rgba_to_laba :: proc(c: RGBA) -> LABA {
+	rf := color_srgb_to_linear(f32(c.r) / 255)
+	gf := color_srgb_to_linear(f32(c.g) / 255)
+	bf := color_srgb_to_linear(f32(c.b) / 255)
+	af := f32(c.a) / 255
+
+	x, y, z := color_linear_rgb_to_xyz_d65(rf, gf, bf)
+
+	xr := x / 0.95047
+	yr := y / 1.00000
+	zr := z / 1.08883
+
+	fx := color_lab_d65_f(xr)
+	fy := color_lab_d65_f(yr)
+	fz := color_lab_d65_f(zr)
+
+	l := 116 * fy - 16
+	lab_a := 500 * (fx - fy)
+	lab_b := 200 * (fy - fz)
+
+	return LABA{l = l, a = lab_a, b = lab_b, alpha = af}
+}
+
+/*
 Converts CIE LCH (L*a*b* polar) to sRGB RGBA.
 */
 lcha_to_rgba :: proc(c: LCHA) -> RGBA {
@@ -872,36 +1289,129 @@ lcha_to_rgba :: proc(c: LCHA) -> RGBA {
 	lab_a := ch * math.cos(h_rad)
 	lab_b := ch * math.sin(h_rad)
 
-	fy := (l + 16) / 116
-	fx := lab_a / 500 + fy
-	fz := fy - lab_b / 200
+	return laba_to_rgba(LABA{l = l, a = lab_a, b = lab_b, alpha = c.a})
+}
 
-	delta :: 6.0 / 29.0 // CIE δ = ∛ε; f_inv switches on t > δ
-	kappa :: 903.3 // ≈ 24389/27
+/*
+Converts device CMYK + alpha to sRGB RGBA.
+*/
+cmyka_to_rgba :: proc(c: CMYKA) -> RGBA {
+	cm := color_clamp01(c.c)
+	mm := color_clamp01(c.m)
+	ym := color_clamp01(c.y)
+	km := color_clamp01(c.k)
+	a := color_u8_from01(c.a)
 
-	/*
-	Inverts the CIE Lab lightness function f for LCH-to-XYZ conversion.
-	*/
-	f_inv :: proc(t: f32) -> f32 {
-		if t > delta {
-			return t * t * t
-		}
-		return (116 * t - 16) / kappa
+	one_minus_k := 1 - km
+	r := color_u8_from01((1 - cm) * one_minus_k)
+	g := color_u8_from01((1 - mm) * one_minus_k)
+	b := color_u8_from01((1 - ym) * one_minus_k)
+
+	return RGBA{r, g, b, a}
+}
+
+/*
+Converts sRGB RGBA to device CMYK + alpha (k = 1 − max(r, g, b)).
+*/
+rgba_to_cmyka :: proc(c: RGBA) -> CMYKA {
+	rf := f32(c.r) / 255
+	gf := f32(c.g) / 255
+	bf := f32(c.b) / 255
+	af := f32(c.a) / 255
+
+	max_c := max(rf, max(gf, bf))
+	k := 1 - max_c
+
+	if k >= 1 {
+		return CMYKA{c = 0, m = 0, y = 0, k = 1, a = af}
 	}
 
-	x := 0.95047 * f_inv(fx)
-	y := 1.00000 * f_inv(fy)
-	z := 1.08883 * f_inv(fz)
+	if max_c <= 0 {
+		return CMYKA{c = 0, m = 0, y = 0, k = 0, a = af}
+	}
 
-	linear_r := 3.2404542 * x - 1.5371385 * y - 0.4985314 * z
-	linear_g := -0.9692660 * x + 1.8760108 * y + 0.0415560 * z
-	linear_b := 0.0556434 * x - 0.2040259 * y + 1.0572252 * z
+	one_minus_k := 1 - k
+	cm := (1 - rf - k) / one_minus_k
+	mm := (1 - gf - k) / one_minus_k
+	ym := (1 - bf - k) / one_minus_k
 
+	return CMYKA{c = color_clamp01(cm), m = color_clamp01(mm), y = color_clamp01(ym), k = k, a = af}
+}
+
+/*
+Converts sRGB RGBA to HWBA (CSS Color Level 4).
+*/
+rgba_to_hwba :: proc(c: RGBA) -> HWBA {
+	rf := f32(c.r) / 255
+	gf := f32(c.g) / 255
+	bf := f32(c.b) / 255
+	af := f32(c.a) / 255
+
+	max_c := max(rf, max(gf, bf))
+	min_c := min(rf, min(gf, bf))
+	delta := max_c - min_c
+
+	h: f32 = 0
+
+	if delta > 0 {
+		switch max_c {
+		case rf:
+			h = 60 * math.mod((gf - bf) / delta, 6)
+		case gf:
+			h = 60 * ((bf - rf) / delta + 2)
+		case:
+			h = 60 * ((rf - gf) / delta + 4)
+		}
+
+		if h < 0 {
+			h += 360
+		}
+	}
+
+	w := min_c
+	b := 1 - max_c
+
+	return HWBA{h = h, w = w, b = b, a = af}
+}
+
+/*
+Returns true when each RGB channel is a web-safe step (0, 51, …, 255).
+*/
+is_web_safe :: proc(c: RGBA) -> bool {
+	is_step :: proc(v: u8) -> bool {
+		return v % WEB_SAFE_STEP == 0
+	}
+
+	return is_step(c.r) && is_step(c.g) && is_step(c.b)
+}
+
+@(private)
+color_web_safe_snap_channel :: proc(v: u8) -> u8 {
+	best: u8 = 0
+	best_dist: int = 256
+
+	for step in 0 ..= 5 {
+		candidate := u8(step * WEB_SAFE_STEP)
+		dist := abs(int(v) - int(candidate))
+
+		if dist < best_dist {
+			best_dist = dist
+			best = candidate
+		}
+	}
+
+	return best
+}
+
+/*
+Snaps RGB to the nearest web-safe palette; alpha is unchanged.
+*/
+rgba_to_web_safe :: proc(c: RGBA) -> RGBA {
 	return RGBA {
-		color_u8_from01(color_linear_to_srgb(linear_r)),
-		color_u8_from01(color_linear_to_srgb(linear_g)),
-		color_u8_from01(color_linear_to_srgb(linear_b)),
-		color_u8_from01(c.a),
+		color_web_safe_snap_channel(c.r),
+		color_web_safe_snap_channel(c.g),
+		color_web_safe_snap_channel(c.b),
+		c.a,
 	}
 }
 
@@ -965,9 +1475,12 @@ to_rgba_color :: proc {
 	rgba_to_rgba,
 	hex_to_rgba,
 	hsla_to_rgba,
+	hsva_to_rgba,
 	hwba_to_rgba,
 	lcha_to_rgba,
 	oklcha_to_rgba,
+	laba_to_rgba,
+	cmyka_to_rgba,
 }
 
 /*
@@ -995,11 +1508,17 @@ color_to_f32 :: proc(c: Colors) -> [4]f32 {
 		rgba = to_rgba_color(v)
 	case HSLA:
 		rgba = to_rgba_color(v)
+	case HSVA:
+		rgba = to_rgba_color(v)
 	case HWBA:
 		rgba = to_rgba_color(v)
 	case LCHA:
 		rgba = to_rgba_color(v)
 	case OKLCHA:
+		rgba = to_rgba_color(v)
+	case LABA:
+		rgba = to_rgba_color(v)
+	case CMYKA:
 		rgba = to_rgba_color(v)
 	}
 

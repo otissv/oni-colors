@@ -315,6 +315,8 @@ test_to_rgba_color_overload :: proc(t: ^testing.T) {
 	expect_rgba(t, to_rgba_color(HWBA{0, 0, 0, 1}), RGBA{255, 0, 0, 255})
 	expect_rgba(t, to_rgba_color(LCHA{100, 0, 0, 1}), RGBA{255, 255, 255, 255})
 	expect_rgba(t, to_rgba_color(OKLCHA{1, 0, 0, 1}), RGBA{255, 255, 255, 255})
+	expect_rgba(t, to_rgba_color(LABA{100, 0, 0, 1}), RGBA{255, 255, 255, 255})
+	expect_rgba(t, to_rgba_color(CMYKA{0, 1, 1, 0, 1}), RGBA{255, 0, 0, 255})
 }
 
 @(test)
@@ -327,9 +329,12 @@ test_color_to_f32_all_variants :: proc(t: ^testing.T) {
 	expect_f32x4(t, color_to_f32(RGBA{255, 0, 0, 128}), {1, 0, 0, 128.0 / 255})
 	expect_f32x4(t, color_to_f32(Hex(0x00FF00FF)), {0, 1, 0, 1})
 	expect_f32x4(t, color_to_f32(HSLA{120, 1, 0.5, 1}), {0, 1, 0, 1})
+	expect_f32x4(t, color_to_f32(HSVA{240, 1, 1, 1}), {0, 0, 1, 1})
 	expect_f32x4(t, color_to_f32(HWBA{240, 0, 0, 1}), {0, 0, 1, 1})
 	expect_f32x4(t, color_to_f32(LCHA{100, 0, 0, 1}), {1, 1, 1, 1})
 	expect_f32x4(t, color_to_f32(OKLCHA{0, 0, 0, 1}), {0, 0, 0, 1})
+	expect_f32x4(t, color_to_f32(LABA{50, 0, 0, 1}), rgba_to_f32(laba_to_rgba({50, 0, 0, 1})))
+	expect_f32x4(t, color_to_f32(CMYKA{0, 1, 1, 0, 1}), {1, 0, 0, 1})
 
 	// Untagged / nil Colors falls through to zero.
 	empty: Colors
@@ -344,9 +349,12 @@ test_colors_union_roundtrip_consistency :: proc(t: ^testing.T) {
 		RGBA{40, 50, 60, 70},
 		Hex(0x11223344),
 		HSLA{200, 0.8, 0.4, 0.9},
+		HSVA{30, 0.75, 0.9, 0.85},
 		HWBA{45, 0.1, 0.2, 0.8},
 		LCHA{70, 20, 100, 1},
 		OKLCHA{0.6, 0.1, 250, 0.75},
+		LABA{55, 12, -8, 0.6},
+		CMYKA{0.2, 0.4, 0.1, 0.05, 0.9},
 	}
 	for sample in samples {
 		via_f32 := color_to_f32(sample)
@@ -360,11 +368,17 @@ test_colors_union_roundtrip_consistency :: proc(t: ^testing.T) {
 			rgba = to_rgba_color(v)
 		case HSLA:
 			rgba = to_rgba_color(v)
+		case HSVA:
+			rgba = to_rgba_color(v)
 		case HWBA:
 			rgba = to_rgba_color(v)
 		case LCHA:
 			rgba = to_rgba_color(v)
 		case OKLCHA:
+			rgba = to_rgba_color(v)
+		case LABA:
+			rgba = to_rgba_color(v)
+		case CMYKA:
 			rgba = to_rgba_color(v)
 		}
 		expect_f32x4(t, via_f32, rgba_to_f32(rgba))
@@ -784,4 +798,187 @@ test_lcha_oklcha_alpha_and_hue_wrap :: proc(t: ^testing.T) {
 test_hsla_alpha_channel :: proc(t: ^testing.T) {
 	expect_rgba(t, hsla_to_rgba({0, 1, 0.5, 0}), RGBA{255, 0, 0, 0})
 	expect_rgba(t, hsla_to_rgba({0, 1, 0.5, 0.2}), RGBA{255, 0, 0, 51})
+}
+
+@(test)
+test_hsva_to_rgba_primaries_and_grays :: proc(t: ^testing.T) {
+	expect_rgba(t, hsva_to_rgba({0, 1, 1, 1}), RGBA{255, 0, 0, 255})
+	expect_rgba(t, hsva_to_rgba({120, 1, 1, 1}), RGBA{0, 255, 0, 255})
+	expect_rgba(t, hsva_to_rgba({240, 1, 1, 1}), RGBA{0, 0, 255, 255})
+	expect_rgba(t, hsva_to_rgba({60, 1, 1, 1}), RGBA{255, 255, 0, 255})
+	expect_rgba(t, hsva_to_rgba({0, 0, 1, 1}), RGBA{255, 255, 255, 255})
+	expect_rgba(t, hsva_to_rgba({0, 0, 0, 1}), RGBA{0, 0, 0, 255})
+	expect_rgba(t, hsva_to_rgba({0, 0, 0.5, 0.5}), RGBA{128, 128, 128, 128})
+}
+
+@(test)
+test_hsva_round_trip_and_clamping :: proc(t: ^testing.T) {
+	samples := []RGBA {
+		{255, 0, 0, 255},
+		{0, 255, 0, 255},
+		{0, 0, 255, 255},
+		{128, 64, 32, 200},
+		{0, 0, 0, 0},
+		{255, 255, 255, 255},
+	}
+
+	for sample in samples {
+		got := hsva_to_rgba(rgba_to_hsva(sample))
+		expect_rgba_near(t, got, sample, 1)
+	}
+
+	expect_rgba(t, hsva_to_rgba({720, 2, 2, 2}), RGBA{255, 0, 0, 255})
+	expect_rgba(t, hsva_to_rgba({-60, -1, 1, 1}), RGBA{255, 255, 255, 255})
+}
+
+@(test)
+test_rgba_to_hsla_and_hex :: proc(t: ^testing.T) {
+	red := rgba_to_hsla({255, 0, 0, 255})
+	expect_close(t, red.h, 0, 1e-3)
+	expect_close(t, red.s, 1)
+	expect_close(t, red.l, 0.5)
+	testing.expect_value(t, rgba_to_hex({255, 0, 0, 255}), Hex(0xFF0000FF))
+	testing.expect_value(t, rgba_to_hex({18, 52, 86, 120}), Hex(0x12345678))
+}
+
+@(test)
+test_hex_parse_and_format :: proc(t: ^testing.T) {
+	got, ok := hex_parse("#f00")
+	testing.expect(t, ok)
+	expect_rgba(t, got, {255, 0, 0, 255})
+
+	got, ok = hex_parse("00ff0080")
+	testing.expect(t, ok)
+	expect_rgba(t, got, {0, 255, 0, 128})
+
+	got, ok = hex_parse("#AABBCCDD")
+	testing.expect(t, ok)
+	expect_rgba(t, got, {0xaa, 0xbb, 0xcc, 0xdd})
+
+	got, ok = hex_parse("#abcd")
+	testing.expect(t, ok)
+	expect_rgba(t, got, {0xaa, 0xbb, 0xcc, 0xdd})
+
+	_, ok = hex_parse("")
+	testing.expect(t, !ok)
+	_, ok = hex_parse("#gg0000")
+	testing.expect(t, !ok)
+	_, ok = hex_parse("#12345")
+	testing.expect(t, !ok)
+
+	formatted := hex_format({255, 0, 128, 64}, false, context.temp_allocator)
+	testing.expect_value(t, formatted, "#ff0080")
+	formatted_a := hex_format({255, 0, 128, 64}, true, context.temp_allocator)
+	testing.expect_value(t, formatted_a, "#ff008040")
+}
+
+@(test)
+test_color_hue_wrap :: proc(t: ^testing.T) {
+	expect_close(t, color_hue_wrap(0), 0)
+	expect_close(t, color_hue_wrap(360), 0)
+	expect_close(t, color_hue_wrap(-90), 270)
+	expect_close(t, color_hue_wrap(450), 90)
+}
+
+@(test)
+test_laba_to_rgba_neutrals :: proc(t: ^testing.T) {
+	expect_rgba(t, laba_to_rgba({0, 0, 0, 1}), RGBA{0, 0, 0, 255})
+	expect_rgba(t, laba_to_rgba({100, 0, 0, 1}), RGBA{255, 255, 255, 255})
+	expect_rgba(t, laba_to_rgba({50, 0, 0, 1}), RGBA{119, 119, 119, 255})
+}
+
+@(test)
+test_laba_round_trip :: proc(t: ^testing.T) {
+	samples := []RGBA {
+		{255, 0, 0, 255},
+		{0, 255, 0, 255},
+		{0, 0, 255, 255},
+		{128, 64, 32, 200},
+		{119, 119, 119, 255},
+	}
+
+	for sample in samples {
+		got := laba_to_rgba(rgba_to_laba(sample))
+		expect_rgba_near(t, got, sample, 2)
+	}
+}
+
+@(test)
+test_lcha_matches_laba_polar :: proc(t: ^testing.T) {
+	lch := LCHA{50, 40, 30, 0.75}
+	h_rad := lch.h * math.RAD_PER_DEG
+	lab := LABA{l = lch.l, a = lch.c * math.cos(h_rad), b = lch.c * math.sin(h_rad), alpha = lch.a}
+	expect_rgba(t, lcha_to_rgba(lch), laba_to_rgba(lab))
+}
+
+@(test)
+test_cmyka_primaries_black_white :: proc(t: ^testing.T) {
+	expect_rgba(t, cmyka_to_rgba({0, 0, 0, 0, 1}), RGBA{255, 255, 255, 255})
+	expect_rgba(t, cmyka_to_rgba({0, 0, 0, 1, 1}), RGBA{0, 0, 0, 255})
+	expect_rgba(t, cmyka_to_rgba({0, 1, 1, 0, 1}), RGBA{255, 0, 0, 255})
+	expect_rgba(t, cmyka_to_rgba({1, 0, 1, 0, 1}), RGBA{0, 255, 0, 255})
+	expect_rgba(t, cmyka_to_rgba({1, 1, 0, 0, 1}), RGBA{0, 0, 255, 255})
+
+	cmyk := rgba_to_cmyka({0, 0, 0, 255})
+	expect_close(t, cmyk.k, 1)
+	expect_close(t, cmyk.c, 0)
+	expect_close(t, cmyk.m, 0)
+	expect_close(t, cmyk.y, 0)
+
+	cmyk = rgba_to_cmyka({255, 255, 255, 255})
+	expect_close(t, cmyk.k, 0)
+
+	cmyk = rgba_to_cmyka({255, 0, 0, 255})
+	expect_close(t, cmyk.c, 0)
+	expect_close(t, cmyk.m, 1)
+	expect_close(t, cmyk.y, 1)
+	expect_close(t, cmyk.k, 0)
+}
+
+@(test)
+test_cmyka_round_trip :: proc(t: ^testing.T) {
+	samples := []RGBA {
+		{255, 0, 0, 255},
+		{0, 255, 0, 255},
+		{0, 0, 255, 255},
+		{200, 100, 50, 180},
+		{64, 64, 64, 255},
+	}
+
+	for sample in samples {
+		got := cmyka_to_rgba(rgba_to_cmyka(sample))
+		expect_rgba_near(t, got, sample, 1)
+	}
+}
+
+@(test)
+test_rgba_to_hwba_round_trip :: proc(t: ^testing.T) {
+	samples := []RGBA {
+		{255, 0, 0, 255},
+		{0, 255, 0, 255},
+		{0, 0, 255, 255},
+		{255, 255, 255, 255},
+		{0, 0, 0, 255},
+		{128, 64, 32, 200},
+	}
+
+	for sample in samples {
+		got := hwba_to_rgba(rgba_to_hwba(sample))
+		expect_rgba_near(t, got, sample, 1)
+	}
+}
+
+@(test)
+test_web_safe_palette :: proc(t: ^testing.T) {
+	testing.expect_value(t, WEB_SAFE_STEP, 51)
+
+	expect_rgba(t, rgba_to_web_safe({0, 0, 0, 128}), RGBA{0, 0, 0, 128})
+	expect_rgba(t, rgba_to_web_safe({255, 255, 255, 255}), RGBA{255, 255, 255, 255})
+	expect_rgba(t, rgba_to_web_safe({33, 33, 33, 255}), RGBA{51, 51, 51, 255})
+	expect_rgba(t, rgba_to_web_safe({204, 153, 102, 64}), RGBA{204, 153, 102, 64})
+
+	testing.expect(t, is_web_safe({0, 51, 102, 255}))
+	testing.expect(t, is_web_safe({255, 204, 153, 0}))
+	testing.expect(t, !is_web_safe({1, 0, 0, 255}))
+	testing.expect(t, !is_web_safe({50, 50, 50, 255}))
 }
